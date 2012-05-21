@@ -1,0 +1,14 @@
+* Fri Jul 29 2011 Junfeng Dong <junfeng.dong@intel.com> - 1.20.1
+- Import 1.20.1 for SLP.
+
+* Sat Mar 06 2010 Anas Nashif <anas.nashif@intel.com> - 1.18.1.4
+- Do not write new timestamp everytime we build
+
+* Thu Dec 18 2008 Anas Nashif <anas.nashif@intel.com> 1.18.1.4
+- Replace  mktemp with /bin/mktemp
+
+* Thu Dec 11 2008 Anas Nashif <anas.nashif@intel.com> 1.18.1.4
+- Use bison
+
+* Fri Sep 12 2008 Yi Yang <yi.y.yang@intel.com> 1.18.1.4
+- Mark man and info as %doc and remove installation warnings of info files
