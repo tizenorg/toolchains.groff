@@ -8,6 +8,7 @@ License: GPLv3+ and GFDL and BSC and MIT
 Group: Applications/Publishing
 URL: http://groff.ffii.org
 Source0: ftp://ftp.gnu.org/gnu/groff/groff-%{version}.tar.gz
+Source1001: packaging/groff.manifest 
 Patch1: groff-info-missing-x11.patch
 Patch2: groff-japanese-charclass.patch
 Patch3: groff-japanese-wcwidth.patch
@@ -67,6 +68,7 @@ language and documentation for creating PDF files.
 %patch3 -p1
 
 %build
+cp %{SOURCE1001} .
 %configure --enable-multibyte
 make
 
@@ -126,10 +128,12 @@ mv $RPM_BUILD_ROOT%{_libdir}/groff/groffer/* $RPM_BUILD_ROOT/%{_datadir}/groff/%
 rm -rf ${RPM_BUILD_ROOT}
 
 %files -f groff-files
+%manifest groff.manifest
 %defattr(-,root,root,-)
 %{_datadir}/groff
 
 %files perl
+%manifest groff.manifest
 %defattr(-,root,root,-)
 %{_bindir}/grog
 %{_bindir}/mmroff
