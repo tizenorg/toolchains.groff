@@ -1,0 +1,859 @@
+Resolves: #596900
+
+From 8855b7d5f80f7c7a667abd690da7e65e0a77ab97 Mon Sep 17 00:00:00 2001
+From: Daiki Ueno <ueno@unixuser.org>
+Date: Thu, 5 Aug 2010 16:00:32 +0900
+Subject: [PATCH] Import Colin Watson's charclass branch with minor fixes.
+
+Changes from the branch:
+- libgroff: make sure to return -1 from glyph_to_unicode() on error.
+- tmac: add cflags to non-punct Japanese characters to ja.tmac.
+- troff: skip "-" on parsing character ranges of the class request.
+- troff: make class request parsing robuster.
+- troff: suppress debug messages if DEBUGGING is not set.
+- nroff: supply "-mja" to groff if running under Japanese locales.
+---
+ src/include/classes.h          |   62 ++++++++++++
+ src/include/font.h             |   16 +++
+ src/libs/libgroff/Makefile.sub |    2 +
+ src/libs/libgroff/classes.cpp  |   48 ++++++++++
+ src/libs/libgroff/font.cpp     |  203 ++++++++++++++++++++++++++--------------
+ src/roff/nroff/nroff.sh        |    6 +
+ src/roff/troff/charinfo.h      |   50 +++++++++--
+ src/roff/troff/input.cpp       |  138 +++++++++++++++++++++++++++
+ tmac/Makefile.sub              |    3 +-
+ tmac/ja.tmac                   |   49 ++++++++++
+ 10 files changed, 499 insertions(+), 78 deletions(-)
+ create mode 100644 src/include/classes.h
+ create mode 100644 src/libs/libgroff/classes.cpp
+ create mode 100644 tmac/ja.tmac
+
+diff --git a/src/include/classes.h b/src/include/classes.h
+new file mode 100644
+index 0000000..2f0e2bd
+--- /dev/null
++++ b/src/include/classes.h
+@@ -0,0 +1,62 @@
++/* This file is in the public domain. */
++
++class charinfo;
++
++class char_class
++{
++  public:
++    virtual bool is_in_class(int c);
++    virtual int lookup_char(int c) = 0;
++    charinfo *get_charinfo();
++    void set_charinfo(charinfo *);
++  protected:
++  private:
++    charinfo *ci;
++};
++
++class single_char_class : public char_class
++{
++  public:
++    single_char_class(int c);
++    int lookup_char(int c);
++  protected:
++  private:
++    int ch;
++};
++
++class range_char_class : public char_class
++{
++  public:
++    range_char_class(int low, int high);
++    int lookup_char(int c);
++  protected:
++  private:
++    int lo, hi;
++};
++
++class ref_char_class : public char_class
++{
++  public:
++    ref_char_class(char_class *klass);
++    int lookup_char(int c);
++    char_class *get_class();
++  protected:
++  private:
++    char_class *ref;
++};
++
++inline bool char_class::is_in_class(int c)
++{
++  return lookup_char(c) == 0;
++}
++
++inline charinfo *char_class::get_charinfo()
++{
++  return ci;
++}
++
++inline void char_class::set_charinfo(charinfo *cis)
++{
++  ci = cis;
++}
++
+diff --git a/src/include/font.h b/src/include/font.h
+index 944250b..4e9edc4 100644
+--- a/src/include/font.h
++++ b/src/include/font.h
+@@ -18,6 +18,12 @@ for more details.
+ You should have received a copy of the GNU General Public License
+ along with this program. If not, see <http://www.gnu.org/licenses/>. */
+ 
++#include <string>
++#include <map>
++#include <vector>
++
++class char_class;
++
+ // A function of this type can be registered to define the semantics of
+ // arbitrary commands in a font DESC file.
+ typedef void (*FONT_COMMAND_HANDLER)(const char *,	// command
+@@ -73,6 +79,9 @@ inline int glyph_to_number(glyph *);	// Convert the given glyph back to
+ 			// a numbered character.
+ inline int glyph_to_index(glyph *);	// Return the unique index that is
+ 			// associated with the given glyph. It is >= 0.
++extern int glyph_to_unicode(glyph *);	// Convert the given glyph to its
++			// Unicode codepoint.  Return -1 if it does not
++			// designate a Unicode character.
+ 
+ inline int glyph_to_number(glyph *g)
+ {
+@@ -267,6 +276,8 @@ public:
+ 			// upper1, ... lowerN, upperN, 0 }.
+ 
+ private:
++  std::map<std::string, std::vector<char_class *> > class_map;
++			// A map of names to class objects.
+   unsigned ligatures;	// Bit mask of available ligatures.  Used by
+ 			// has_ligature().
+   font_kern_list **kern_hash_table;	// Hash table of kerning pairs. 
+@@ -308,6 +319,11 @@ private:
+   void extend_ch();
+   void compact();
+ 
++  // These methods add glyphs to character classes.
++  void add_class(const char *, glyph *);
++  void add_class(const char *, glyph *, glyph *);
++  void add_class(const char *, const char *);
++
+   void add_kern(glyph *, glyph *, int);	// Add to the kerning table a
+ 			// kerning amount (arg3) between two given glyphs
+ 			// (arg1 and arg2).
+diff --git a/src/libs/libgroff/Makefile.sub b/src/libs/libgroff/Makefile.sub
+index ac83892..cb8c14e 100644
+--- a/src/libs/libgroff/Makefile.sub
++++ b/src/libs/libgroff/Makefile.sub
+@@ -5,6 +5,7 @@ EXTRA_CFLAGS=-D__GETOPT_PREFIX=groff_ \
+ OBJS=\
+   assert.$(OBJEXT) \
+   change_lf.$(OBJEXT) \
++  classes.$(OBJEXT) \
+   cmap.$(OBJEXT) \
+   color.$(OBJEXT) \
+   cset.$(OBJEXT) \
+@@ -55,6 +56,7 @@ OBJS=\
+ CCSRCS=\
+   $(srcdir)/assert.cpp \
+   $(srcdir)/change_lf.cpp \
++  $(srcdir)/classes.cpp \
+   $(srcdir)/cmap.cpp \
+   $(srcdir)/color.cpp \
+   $(srcdir)/cset.cpp \
+diff --git a/src/libs/libgroff/classes.cpp b/src/libs/libgroff/classes.cpp
+new file mode 100644
+index 0000000..eef1742
+--- /dev/null
++++ b/src/libs/libgroff/classes.cpp
+@@ -0,0 +1,48 @@
++/* This file is in the public domain. */
++
++#include "classes.h"
++
++single_char_class::single_char_class(int c) :
++  ch(c)
++{
++}
++
++int single_char_class::lookup_char(int c)
++{
++  if (c < ch)
++    return -1;
++  else if (c > ch)
++    return 1;
++  else
++    return 0;
++}
++
++range_char_class::range_char_class(int low, int high) :
++  lo(low), hi(high)
++{
++}
++
++int range_char_class::lookup_char(int c)
++{
++  if (c < lo)
++    return -1;
++  else if (c > hi)
++    return 1;
++  else
++    return 0;
++}
++
++ref_char_class::ref_char_class(char_class *klass) :
++  ref(klass)
++{
++}
++
++int ref_char_class::lookup_char(int c)
++{
++  return ref->lookup_char(c);
++}
++
++char_class *ref_char_class::get_class()
++{
++  return ref;
++}
+diff --git a/src/libs/libgroff/font.cpp b/src/libs/libgroff/font.cpp
+index d0b4a12..18e0a07 100644
+--- a/src/libs/libgroff/font.cpp
++++ b/src/libs/libgroff/font.cpp
+@@ -31,6 +31,7 @@ along with this program. If not, see <http://www.gnu.org/licenses/>. */
+ #include "font.h"
+ #include "unicode.h"
+ #include "paper.h"
++#include "classes.h"
+ 
+ const char *const WS = " \t\n\r";
+ 
+@@ -148,6 +149,49 @@ void text_file::error(const char *format,
+ }
+ 
+ 
++int glyph_to_unicode(glyph *g)
++{
++  const char *nm = glyph_to_name(g);
++  if (nm != NULL) {
++    // ASCII character?
++    if (nm[0] == 'c' && nm[1] == 'h' && nm[2] == 'a' && nm[3] == 'r'
++	&& (nm[4] >= '0' && nm[4] <= '9')) {
++      int n = (nm[4] - '0');
++      if (nm[5] == '\0')
++	return n;
++      if (n > 0 && (nm[5] >= '0' && nm[5] <= '9')) {
++	n = 10*n + (nm[5] - '0');
++	if (nm[6] == '\0')
++	  return n;
++	if (nm[6] >= '0' && nm[6] <= '9') {
++	  n = 10*n + (nm[6] - '0');
++	  if (nm[7] == '\0' && n < 128)
++	    return n;
++	}
++      }
++    }
++    // Unicode character?
++    if (check_unicode_name(nm)) {
++      char *ignore;
++      return (int)strtol(nm + 1, &ignore, 16);
++    }
++    // If `nm' is a single letter `x', the glyph name is `\x'.
++    char buf[] = { '\\', '\0', '\0' };
++    if (nm[1] == '\0') {
++      buf[1] = nm[0];
++      nm = buf;
++    }
++    // groff glyphs that map to Unicode?
++    const char *unicode = glyph_name_to_unicode(nm);
++    if (unicode != NULL && strchr(unicode, '_') == NULL) {
++      char *ignore;
++      return (int)strtol(unicode, &ignore, 16);
++    }
++  }
++  return -1;
++}
++
++
+ /* font functions */
+ 
+ font::font(const char *s)
+@@ -269,39 +313,10 @@ int font::contains(glyph *g)
+     return 1;
+   if (is_unicode) {
+     // Unicode font
+-    const char *nm = glyph_to_name(g);
+-    if (nm != NULL) {
+-      // ASCII character?
+-      if (nm[0] == 'c' && nm[1] == 'h' && nm[2] == 'a' && nm[3] == 'r'
+-          && (nm[4] >= '0' && nm[4] <= '9')) {
+-	int n = (nm[4] - '0');
+-	if (nm[5] == '\0')
+-	  return 1;
+-	if (n > 0 && (nm[5] >= '0' && nm[5] <= '9')) {
+-	  n = 10*n + (nm[5] - '0');
+-	  if (nm[6] == '\0')
+-	    return 1;
+-	  if (nm[6] >= '0' && nm[6] <= '9') {
+-	    n = 10*n + (nm[6] - '0');
+-	    if (nm[7] == '\0' && n < 128)
+-	      return 1;
+-	  }
+-	}
+-      }
+-      // Unicode character?
+-      if (check_unicode_name(nm))
+-	return 1;
+-      // If `nm' is a single letter `x', the glyph name is `\x'.
+-      char buf[] = { '\\', '\0', '\0' };
+-      if (nm[1] == '\0') {
+-	buf[1] = nm[0];
+-        nm = buf;
+-      }
+-      // groff glyph name that maps to Unicode?
+-      const char *unicode = glyph_name_to_unicode(nm);
+-      if (unicode != NULL && strchr(unicode, '_') == NULL)
+-	return 1;
+-    }
++    // ASCII or Unicode character, or groff glyph name that maps to Unicode?
++    int uni = glyph_to_unicode(g);
++    if (uni >= 0)
++      return 1;
+     // Numbered character?
+     int n = glyph_to_number(g);
+     if (n >= 0)
+@@ -554,43 +569,10 @@ int font::get_code(glyph *g)
+   }
+   if (is_unicode) {
+     // Unicode font
+-    const char *nm = glyph_to_name(g);
+-    if (nm != NULL) {
+-      // ASCII character?
+-      if (nm[0] == 'c' && nm[1] == 'h' && nm[2] == 'a' && nm[3] == 'r'
+-          && (nm[4] >= '0' && nm[4] <= '9')) {
+-	int n = (nm[4] - '0');
+-	if (nm[5] == '\0')
+-	  return n;
+-	if (n > 0 && (nm[5] >= '0' && nm[5] <= '9')) {
+-	  n = 10*n + (nm[5] - '0');
+-	  if (nm[6] == '\0')
+-	    return n;
+-	  if (nm[6] >= '0' && nm[6] <= '9') {
+-	    n = 10*n + (nm[6] - '0');
+-	    if (nm[7] == '\0' && n < 128)
+-	      return n;
+-	  }
+-	}
+-      }
+-      // Unicode character?
+-      if (check_unicode_name(nm)) {
+-	char *ignore;
+-	return (int)strtol(nm + 1, &ignore, 16);
+-      }
+-      // If `nm' is a single letter `x', the glyph name is `\x'.
+-      char buf[] = { '\\', '\0', '\0' };
+-      if (nm[1] == '\0') {
+-	buf[1] = nm[0];
+-        nm = buf;
+-      }
+-      // groff glyphs that map to Unicode?
+-      const char *unicode = glyph_name_to_unicode(nm);
+-      if (unicode != NULL && strchr(unicode, '_') == NULL) {
+-	char *ignore;
+-	return (int)strtol(unicode, &ignore, 16);
+-      }
+-    }
++    // ASCII or Unicode character, or groff glyph name that maps to Unicode?
++    int uni = glyph_to_unicode(g);
++    if (uni >= 0)
++      return uni;
+     // Numbered character?
+     int n = glyph_to_number(g);
+     if (n >= 0)
+@@ -790,6 +772,38 @@ again:
+   return 0;
+ }
+ 
++void font::add_class(const char *name, glyph *g)
++{
++  int num = glyph_to_number(g);
++
++  if (num == -1)
++    return;
++
++  single_char_class *ref = new single_char_class(num);
++  class_map[name].push_back(ref);
++}
++
++void font::add_class(const char *name, glyph *g1, glyph *g2)
++{
++  int num1 = glyph_to_number(g1);
++  int num2 = glyph_to_number(g2);
++
++  if ((num1 == -1) || (num2 == -1))
++    return;
++
++  range_char_class *ref = new range_char_class(num1, num2);
++  class_map[name].push_back(ref);
++}
++
++void font::add_class(const char *name, const char *oname)
++{
++  std::vector<char_class *> *vec = &class_map[oname];
++  int nelems = vec->size();
++  for (int i = 0; i < nelems; i++) {
++    class_map[name].push_back((*vec)[i]);
++  }
++}
++
+ // If the font can't be found, then if not_found is non-NULL, it will be set
+ // to 1 otherwise a message will be printed.
+ 
+@@ -1020,6 +1034,55 @@ int font::load(int *not_found, int head_only)
+ 	  return 0;
+ 	}
+       }
++      else if (strcmp(command, "classes") == 0) {
++	if (head_only)
++	  return 1;
++	for (;;) {
++	  if (!t.next()) {
++	    command = 0;
++	    break;
++	  }
++	  char *cname = strtok(t.buf, WS);
++	  if (cname == 0)
++	    continue;
++	  char *equals = strtok(0, WS);
++	  if (equals == 0) {
++	    command = cname;
++	    break;
++	  }
++	  p = strtok(0, WS);
++	  if (p == 0) {
++	    t.error("empty character classes not allowed");
++	    return 0;
++	  }
++	  glyph *g1 = 0, *g2 = 0;
++	  while (p != 0) {
++	    if ((g1 != 0) && (p[0] == '-')) {
++	      p = strtok(0, WS);
++	      if (p == 0) {
++		t.error("incomplete range in class definition");
++		return 0;
++	      }
++	      g2 = name_to_glyph(p);
++	      add_class(cname, g1, g2);
++	      g1 = g2 = 0;
++	    }
++	    else if (g1 != 0) {
++	      add_class(cname, g1);
++	      g1 = 0;
++	    }
++	    if ((p[0] == '<') && (p[strlen(p)-1] == '>')) {
++	      add_class(cname, p);
++	    }
++	    else if (p[0] != '-') {
++	      g1 = name_to_glyph(p);
++	    }
++	    p = strtok(0, WS);
++	  }
++	  if (g1 != 0)
++	    add_class(cname, g1);
++	}
++      }
+       else {
+ 	t.error("unrecognised command `%1' "
+ 		"after `kernpairs' or `charset' command",
+diff --git a/src/roff/nroff/nroff.sh b/src/roff/nroff/nroff.sh
+index d4bd8a0..22529f8 100644
+--- a/src/roff/nroff/nroff.sh
++++ b/src/roff/nroff/nroff.sh
+@@ -125,6 +125,12 @@ case $T in
+     T=-T$Tloc ;;
+ esac
+ 
++case "${LC_ALL-${LC_CTYPE-${LANG}}}" in
++    ja*)
++	opts="$opts -mja"
++	;;
++esac
++
+ # Set up the `GROFF_BIN_PATH' variable
+ # to be exported in the current `GROFF_RUNTIME' environment.
+ 
+diff --git a/src/roff/troff/charinfo.h b/src/roff/troff/charinfo.h
+index 2c2c268..71cd84d 100644
+--- a/src/roff/troff/charinfo.h
++++ b/src/roff/troff/charinfo.h
+@@ -18,6 +18,9 @@ for more details.
+ You should have received a copy of the GNU General Public License
+ along with this program. If not, see <http://www.gnu.org/licenses/>. */
+ 
++#include <vector>
++#include <utility>
++
+ class macro;
+ 
+ class charinfo : glyph {
+@@ -35,6 +38,9 @@ class charinfo : glyph {
+   char translate_input;		// non-zero means that asciify_code is
+ 				// active for .asciify (set by .trin)
+   char_mode mode;
++  // Unicode character classes
++  std::vector<std::pair<int, int> > ranges;
++  std::vector<charinfo *> nested_classes;
+ public:
+   enum {		// Values for the flags bitmask.  See groff
+ 			// manual, description of the `.cflags' request.
+@@ -66,6 +72,7 @@ public:
+   unsigned char get_hyphenation_code();
+   unsigned char get_ascii_code();
+   unsigned char get_asciify_code();
++  int get_unicode_code();
+   void set_hyphenation_code(unsigned char);
+   void set_ascii_code(unsigned char);
+   void set_asciify_code(unsigned char);
+@@ -73,6 +80,7 @@ public:
+   int get_translation_input();
+   charinfo *get_translation(int = 0);
+   void set_translation(charinfo *, int, int);
++  unsigned char get_flags();
+   void set_flags(unsigned char);
+   void set_special_translation(int, int);
+   int get_special_translation(int = 0);
+@@ -87,6 +95,13 @@ public:
+   int is_fallback();
+   int is_special();
+   symbol *get_symbol();
++  void add_to_class(int);
++  void add_to_class(int, int);
++  void add_to_class(charinfo *);
++  bool is_class();
++  bool contains(int);
++  bool contains(symbol);
++  bool contains(charinfo *);
+ };
+ 
+ charinfo *get_charinfo(symbol);
+@@ -95,37 +110,37 @@ charinfo *get_charinfo_by_number(int);
+ 
+ inline int charinfo::overlaps_horizontally()
+ {
+-  return flags & OVERLAPS_HORIZONTALLY;
++  return get_flags() & OVERLAPS_HORIZONTALLY;
+ }
+ 
+ inline int charinfo::overlaps_vertically()
+ {
+-  return flags & OVERLAPS_VERTICALLY;
++  return get_flags() & OVERLAPS_VERTICALLY;
+ }
+ 
+ inline int charinfo::can_break_before()
+ {
+-  return flags & BREAK_BEFORE;
++  return get_flags() & BREAK_BEFORE;
+ }
+ 
+ inline int charinfo::can_break_after()
+ {
+-  return flags & BREAK_AFTER;
++  return get_flags() & BREAK_AFTER;
+ }
+ 
+ inline int charinfo::ends_sentence()
+ {
+-  return flags & ENDS_SENTENCE;
++  return get_flags() & ENDS_SENTENCE;
+ }
+ 
+ inline int charinfo::transparent()
+ {
+-  return flags & TRANSPARENT;
++  return get_flags() & TRANSPARENT;
+ }
+ 
+ inline int charinfo::ignore_hcodes()
+ {
+-  return flags & IGNORE_HCODES;
++  return get_flags() & IGNORE_HCODES;
+ }
+ 
+ inline int charinfo::numbered()
+@@ -216,3 +231,24 @@ inline symbol *charinfo::get_symbol()
+ {
+   return( &nm );
+ }
++
++inline void charinfo::add_to_class(int c)
++{
++  // TODO ranges cumbersome for single characters?
++  ranges.push_back(std::pair<int, int>(c, c));
++}
++
++inline void charinfo::add_to_class(int lo, int hi)
++{
++  ranges.push_back(std::pair<int, int>(lo, hi));
++}
++
++inline void charinfo::add_to_class(charinfo *ci)
++{
++  nested_classes.push_back(ci);
++}
++
++inline bool charinfo::is_class()
++{
++  return (!ranges.empty() || !nested_classes.empty());
++}
+diff --git a/src/roff/troff/input.cpp b/src/roff/troff/input.cpp
+index 5335c1c..88782b1 100644
+--- a/src/roff/troff/input.cpp
++++ b/src/roff/troff/input.cpp
+@@ -6740,6 +6740,74 @@ void hyphenation_patterns_file_code()
+   skip_line();
+ }
+ 
++dictionary char_class_dictionary(501);
++
++void define_class()
++{
++  tok.skip();
++  symbol nm = get_name(1);
++  if (nm.is_null()) {
++    skip_line();
++    return;
++  }
++  charinfo *ci = get_charinfo(nm);
++  charinfo *child1 = 0, *child2 = 0;
++  while (!tok.newline() && !tok.eof()) {
++    tok.skip();
++    if (child1 != 0 && tok.ch() == '-') {
++      tok.next();
++      child2 = tok.get_char(1);
++      if (!child2) {
++	warning(WARN_MISSING,
++		"missing the end of character range in class `%1'",
++		nm.contents());
++	skip_line();
++	return;
++      }
++      if (child1->is_class() || child2->is_class()) {
++	warning(WARN_SYNTAX,
++		"nested character class is not allowed in range definition");
++	skip_line();
++	return;
++      }
++      ci->add_to_class(child1->get_unicode_code(), child2->get_unicode_code());
++      child1 = child2 = 0;
++    }
++    else if (child1 != 0) {
++      if (child1->is_class()) {
++	ci->add_to_class(child1);
++      }
++      else {
++	ci->add_to_class(child1->get_unicode_code());
++      }
++      child1 = 0;
++    }
++    child1 = tok.get_char(1);
++    tok.next();
++    if (!child1) {
++      if (!tok.newline())
++	skip_line();
++      break;
++    }
++  }
++  if (child1 != 0) {
++    if (child1->is_class()) {
++      ci->add_to_class(child1);
++    }
++    else {
++      ci->add_to_class(child1->get_unicode_code());
++    }
++    child1 = 0;
++  }
++  if (!ci->is_class()) {
++    warning(WARN_SYNTAX,
++	    "empty class definition for `%1'",
++	    nm.contents());
++    return;
++  }
++  (void)char_class_dictionary.lookup(nm, ci);
++}
++
+ charinfo *token::get_char(int required)
+ {
+   if (type == TOKEN_CHAR)
+@@ -7817,6 +7885,7 @@ void init_input_requests()
+   init_request("cflags", char_flags);
+   init_request("char", define_character);
+   init_request("chop", chop_macro);
++  init_request("class", define_class);
+   init_request("close", close_request);
+   init_request("color", activate_color);
+   init_request("composite", composite_request);
+@@ -8367,6 +8436,13 @@ charinfo::charinfo(symbol s)
+   number = -1;
+ }
+ 
++int charinfo::get_unicode_code()
++{
++  if (ascii_code != '\0')
++    return ascii_code;
++  return glyph_to_unicode(this);
++}
++
+ void charinfo::set_hyphenation_code(unsigned char c)
+ {
+   hyphenation_code = c;
+@@ -8388,6 +8464,25 @@ void charinfo::set_translation(charinfo *ci, int tt, int ti)
+   transparent_translate = tt;
+ }
+ 
++// Get the union of all flags affecting this charinfo.
++unsigned char charinfo::get_flags()
++{
++  unsigned char all_flags = flags;
++  dictionary_iterator iter(char_class_dictionary);
++  charinfo *cp;
++  symbol s;
++  while (iter.get(&s, (void **)&cp)) {
++    assert(!s.is_null());
++    if (cp->contains(get_unicode_code())) {
++#if defined(DEBUGGING)
++      fprintf(stderr, "charinfo::get_flags %p %s %d\n", cp, cp->nm.contents(), cp->flags);
++#endif
++      all_flags |= cp->flags;
++    }
++  }
++  return all_flags;
++}
++
+ void charinfo::set_special_translation(int c, int tt)
+ {
+   special_translation = c;
+@@ -8432,6 +8527,49 @@ int charinfo::get_number()
+   return number;
+ }
+ 
++bool charinfo::contains(int c)
++{
++  std::vector<std::pair<int, int> >::const_iterator ranges_iter;
++  ranges_iter = ranges.begin();
++  while (ranges_iter != ranges.end()) {
++    if (c >= ranges_iter->first && c <= ranges_iter->second) {
++#if defined(DEBUGGING)
++      fprintf(stderr, "charinfo::contains(%d)\n", c);
++#endif
++      return true;
++    }
++    ++ranges_iter;
++  }
++
++  std::vector<charinfo *>::const_iterator nested_iter;
++  nested_iter = nested_classes.begin();
++  while (nested_iter != nested_classes.end()) {
++    if ((*nested_iter)->contains(c))
++      return true;
++    ++nested_iter;
++  }
++
++  return false;
++}
++
++bool charinfo::contains(symbol nm)
++{
++  const char *unicode = glyph_name_to_unicode(nm.contents());
++  if (unicode != NULL && strchr(unicode, '_') == NULL) {
++    char *ignore;
++    int c = (int)strtol(unicode, &ignore, 16);
++    return contains(c);
++  }
++  else
++    return false;
++}
++
++bool charinfo::contains(charinfo *)
++{
++  // TODO
++  return false;
++}
++
+ symbol UNNAMED_SYMBOL("---");
+ 
+ // For numbered characters not between 0 and 255, we make a symbol out
+diff --git a/tmac/Makefile.sub b/tmac/Makefile.sub
+index ef4b577..5900010 100644
+--- a/tmac/Makefile.sub
++++ b/tmac/Makefile.sub
+@@ -55,7 +55,8 @@ NORMALFILES=\
+   fr.tmac hyphen.fr \
+   sv.tmac hyphen.sv \
+   de.tmac den.tmac hyphen.det hyphen.den hyphenex.det \
+-  cs.tmac hyphen.cs hyphenex.cs
++  cs.tmac hyphen.cs hyphenex.cs \
++  ja.tmac
+ 
+ # These files are handled specially during installation and deinstallation.
+ SPECIALFILES=an.tmac s.tmac www.tmac
+diff --git a/tmac/ja.tmac b/tmac/ja.tmac
+new file mode 100644
+index 0000000..eed664b
+--- /dev/null
++++ b/tmac/ja.tmac
+@@ -0,0 +1,49 @@
++.\" -*- mode: nroff; coding: utf-8; -*-
++.\"
++.\" Japanese localization for groff
++.\"
++.\" Copyright (C) 2009 Free Software Foundation, Inc.
++.\"   Written by Fumitoshi UKAI <ukai@debian.or.jp> and
++.\"   Colin Watson <cjwatson@debian.org>
++.\"
++.\" This file is part of groff.
++.\"
++.\" groff is free software; you can redistribute it and/or modify it under
++.\" the terms of the GNU General Public License as published by the Free
++.\" Software Foundation, either version 3 of the License, or
++.\" (at your option) any later version.
++.\"
++.\" groff is distributed in the hope that it will be useful, but WITHOUT ANY
++.\" WARRANTY; without even the implied warranty of MERCHANTABILITY or
++.\" FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
++.\" for more details.
++.\"
++.\" You should have received a copy of the GNU General Public License
++.\" along with this program. If not, see <http://www.gnu.org/licenses/>.
++.\"
++.\" Please send comments to groff@gnu.org.
++.
++.
++.\" Locale string
++.
++.ds locale japanese\"
++.
++.
++.class [CJKprepunct] \
++  , : ; > } \
++  \[u3001] \[u3002] \[uFF0C] \[uFF0E] \[u30FB] \[uFF1A] \[uFF1B] \[uFF1F] \
++  \[uFF01] \[uFF09] \[u3015] \[uFF3D] \[uFF5D] \[u300D] \[u300F] \[u3011] \
++  \[u3041] \[u3043] \[u3045] \[u3047] \[u3049] \[u3063] \[u3083] \[u3085] \
++  \[u3087] \[u30FC] \
++  \[u30A1] \[u30A3] \[u30A5] \[u30A7] \[u30A9] \[u30C3] \[u30E3] \[u30E5] \
++  \[u30E7]
++.class [CJKpostpunct] \
++  \[uFF08] \[u3014] \[uFF3B] \[uFF5B] \[u300C] \[u300E] \[u3010]
++.
++.\" Hiragana, Katakana, and Kanji glyphs.
++.class [CJKnormal] \
++  \[u3041]-\[u3096] \[u30A0]-\[u30FF] \[u4E00]-\[u9FFF]
++.
++.cflags 2 \C'[CJKprepunct]'
++.cflags 4 \C'[CJKpostpunct]'
++.cflags 66 \C'[CJKnormal]'
+-- 
+1.7.3.2
+
