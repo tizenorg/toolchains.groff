@@ -68,7 +68,7 @@ language and documentation for creating PDF files.
 
 %build
 %configure --enable-multibyte
-make
+make %{?_smp_mflags}
 
 %install
 rm -rf ${RPM_BUILD_ROOT}
@@ -118,6 +118,7 @@ ln -sf doc.tmac $RPM_BUILD_ROOT%{_datadir}/groff/%version/tmac/docj.tmac
 mkdir -p $RPM_BUILD_ROOT%{_datadir}/groff/%{version}/groffer/
 chmod 755 $RPM_BUILD_ROOT%{_libdir}/groff/groffer/version.sh
 mv $RPM_BUILD_ROOT%{_libdir}/groff/groffer/* $RPM_BUILD_ROOT/%{_datadir}/groff/%{version}/groffer/
+
 
 %remove_docs
 
