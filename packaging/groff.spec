@@ -3,7 +3,8 @@
 Summary: A document formatting system
 Name:	groff
 Version: 1.20.1
-Release: 1
+Release: %{?release_prefix:%{release_prefix}.}1.10.%{?dist}%{!?dist:tizen}
+VCS:     external/groff#Z910F_PROTEX_0625-2-g2440436a057df945142a1e25b45de0c577f549de
 License: GPLv3+ and GFDL and BSC and MIT
 Group: Applications/Publishing
 URL: http://groff.ffii.org
@@ -134,3 +135,30 @@ rm -rf ${RPM_BUILD_ROOT}
 %{_bindir}/grog
 %{_bindir}/mmroff
 %{_bindir}/afmtodit
+%changelog
+* Sat Jun 28 2014 SLP SCM <slpsystem.m@samsung.com> - None 
+- PROJECT: external/groff
+- COMMIT_ID: 2440436a057df945142a1e25b45de0c577f549de
+- BRANCH: master
+- PATCHSET_REVISION: 2440436a057df945142a1e25b45de0c577f549de
+- CHANGE_OWNER: \"UkJung Kim\" <ujkim@samsung.com>
+- PATCHSET_UPLOADER: \"UkJung Kim\" <ujkim@samsung.com>
+- CHANGE_URL: http://slp-info.sec.samsung.net/gerrit/534342
+- PATCHSET_REVISION: 2440436a057df945142a1e25b45de0c577f549de
+- TAGGER: SLP SCM <slpsystem.m@samsung.com>
+- Gerrit patchset approval info:
+- UkJung Kim <ujkim@samsung.com> Verified : 1
+- Newton Lee <newton.lee@samsung.com> Code-Review : 2
+- Newton Lee <newton.lee@samsung.com> Verified : 1
+- CHANGE_SUBJECT: Merged x86_64 support to master
+- Merged x86_64 support to master
+* Fri Jul 29 2011 Junfeng Dong <junfeng.dong@intel.com> - 1.20.1
+- Import 1.20.1 for SLP.
+* Sat Mar  6 2010 Anas Nashif <anas.nashif@intel.com> - 1.18.1.4
+- Do not write new timestamp everytime we build
+* Thu Dec 18 2008 Anas Nashif <anas.nashif@intel.com> 1.18.1.4
+- Replace  mktemp with /bin/mktemp
+* Thu Dec 11 2008 Anas Nashif <anas.nashif@intel.com> 1.18.1.4
+- Use bison
+* Fri Sep 12 2008 Yi Yang <yi.y.yang@intel.com> 1.18.1.4
+- Mark man and info as %%doc and remove installation warnings of info files
